@@ -55,6 +55,7 @@ def measure(coder, data: bytes, verify: bool):
     tracemalloc.stop()
 
     out ={
+        "encoded_data": encoded,
         "compressed_size": len(encoded),
         "compression_time_ms": round((t1-t0)*1000, 3),
         "compression_mem_kb": round(peak_enc/1024, 2),
@@ -72,7 +73,8 @@ def measure(coder, data: bytes, verify: bool):
         #Single byte mismatch means the coder failed.
         if decoded != data:
             raise ValueError(f"{coder.name}: round‑trip failed(data corrupted)")
-        
+
+        out["decoded_data"] = decoded
         out["decompressed_size"] = len(decoded)
 
         out.update(
@@ -94,7 +96,7 @@ def main() -> None:
         help="additionally decodes and confirms that output = input for algorithm integrity"
     )
     args = parser.parse_args()
-    args.verify = True #personal terminal broke lol
+    args.verify = False #switch to True if personal terminal broke lol
 
     #Discover inputs
     files = sorted(Path("data").iterdir())
@@ -103,6 +105,8 @@ def main() -> None:
 
     #Prep outputs
     Path("results").mkdir(exist_ok=True)
+    Path("compressed_results").mkdir(exist_ok=True)
+
     coders = [HuffmanCoder(), ArithmeticCoder()]
 
     header = [
@@ -131,15 +135,33 @@ def main() -> None:
             orig_size = len(data)
             kind = file_kind(path)
             per_file: dict[str, dict] ={}
+            
+            saved_files = []
 
             for coder in coders:
                 try:
                     metrics = measure(coder, data, verify=args.verify)
                 except Exception as exc:
-                    #If file fails, skips and continues to next file
-                    print(f"[warn] {coder.name} failed on {path.name}:{exc}")
+                    print(f"[warn] {coder.name} failed on {path.name}: {exc}")
                     continue
 
+                #Write compressed file
+                if "encoded_data" in metrics:
+                    comp_path = Path("compressed_results")/f"{path.name}.{coder.name.lower()}"
+                    comp_path.write_bytes(metrics["encoded_data"])
+                    saved_files.append(f"(compressed {comp_path.name})")
+                else:
+                    print(f"[warn] Missing encoded_data for {path.name} with {coder.name}")
+
+                #Write decompressed file
+                if args.verify and "decoded_data" in metrics:
+                    decomp_path = Path("decompressed_results")/f"{coder.name.lower()}_{path.name}"
+                    decomp_path.write_bytes(metrics["decoded_data"])
+                    saved_files.append(f"(decompressed {decomp_path.name})")
+                elif args.verify:
+                    print(f"[warn] Missing decoded_data for {path.name} with {coder.name}")
+
+                #Save to CSV
                 row ={
                     "file": path.name,
                     "type": kind,
@@ -162,6 +184,9 @@ def main() -> None:
 
                 writer.writerow(row)
                 per_file[coder.name] = row
+                
+            if saved_files:
+                print("Saved:", " ".join(saved_files))
 
             #File summary
             if{"Huffman", "Arithmetic"} <= per_file.keys():
@@ -189,4 +214,5 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
 
